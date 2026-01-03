@@ -13,83 +13,84 @@ on:
   workflow_dispatch:
 
 jobs:
-  matrix-prep:
-    runs-on: ubuntu-latest
-    steps:
-      - id: linux
-        run: echo "os=ubuntu-latest" >> $GITHUB_OUTPUT
-      - id: windows
-        run: echo "os=windows-latest" >> $GITHUB_OUTPUT
-      - id: macos
-        run: echo "os=macos-latest" >> $GITHUB_OUTPUT
-    outputs:
-      os: ${{ toJSON(steps.*.outputs.os) }}
-
   build:
     name: ${{ matrix.preset }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
-    needs:
-      - matrix-prep
-
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.matrix-prep.outputs.os) }}
-        preset: [linux-debug, macos-debug, windows-debug, windows-release]
-        exclude:
+        include:
           - os: ubuntu-latest
-            preset: macos-debug
-          - os: ubuntu-latest
-            preset: windows-debug
-          - os: ubuntu-latest
-            preset: windows-release
-
-          - os: macos-latest
             preset: linux-debug
+            triplet: x64-linux
           - os: macos-latest
-            preset: windows-debug
-          - os: macos-latest
-            preset: windows-release
-
-          - os: windows-latest
-            preset: linux-debug
-          - os: windows-latest
             preset: macos-debug
+            triplet: x64-osx
+          - os: windows-latest
+            preset: windows-debug
+            triplet: x64-windows
+          - os: windows-latest
+            preset: windows-release
+            triplet: x64-windows
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Install system packages
-        uses: ConorMacBride/install-package@v1
-        with:
-          brew: pkg-config
+      - name: Install system packages (macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkg-config ninja
 
-      - name: Install CMake
-        uses: lukka/get-cmake@latest
+      - name: Install system packages (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      - name: Setup vcpkg
-        uses:
-          lukka/run-vcpkg@v11
-        with:
-          vcpkgDirectory: "${{ github.workspace }}/vcpkg"
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          .\vcpkg\bootstrap-vcpkg.bat
+        shell: pwsh
+
+      - name: Install vcpkg (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
+        shell: bash
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: .\vcpkg\vcpkg install --triplet=${{ matrix.triplet }}
+        shell: pwsh
+
+      - name: Install dependencies (Unix)
+        if: runner.os != 'Windows'
+        run: ./vcpkg/vcpkg install --triplet=${{ matrix.triplet }}
+
+      - name: Configure CMake
+        run: cmake --preset ${{ matrix.preset }}
 
       - name: Build
-        uses: lukka/run-cmake@v10
-        with:
-          configurePreset: ${{ matrix.preset }}
-          buildPreset: ${{ matrix.preset }}
-          packagePreset: ${{ matrix.preset }}
+        run: cmake --build out/build/${{ matrix.preset }} --config ${{ contains(matrix.preset, 'release') && 'Release' || 'Debug' }}
+
+      - name: Install
+        run: cmake --install out/build/${{ matrix.preset }} --prefix out/install/${{ matrix.preset }}
+
+      - name: Package
+        run: cpack --preset ${{ matrix.preset }}
         env:
-          PACKAGE_NAME: "odin-protoc-plugin" # TODO: get this from the repo name
+          PACKAGE_NAME: "odin-protoc-plugin"
           PACKAGE_VERSION: ${{ github.ref_name }}
           PACKAGE_SYSTEM: ${{ matrix.preset }}
 
       - name: Release
-        uses: softprops/action-gh-release@v0.1.15
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           draft: true

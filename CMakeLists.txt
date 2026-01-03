@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.25...3.30)
 
 set(USE_FOLDERS ON)
 set(CMAKE_CXX_STANDARD 20)
